@@ -238,6 +238,9 @@ func parseOpenAIStreamUsage(line []byte) (usage.Detail, bool) {
 	if !usageNode.Exists() {
 		return usage.Detail{}, false
 	}
+	if !isTerminalOpenAIUsagePayload(payload) {
+		return usage.Detail{}, false
+	}
 	detail := usage.Detail{
 		InputTokens:  usageNode.Get("prompt_tokens").Int(),
 		OutputTokens: usageNode.Get("completion_tokens").Int(),
@@ -250,6 +253,20 @@ func parseOpenAIStreamUsage(line []byte) (usage.Detail, bool) {
 		detail.ReasoningTokens = reasoning.Int()
 	}
 	return detail, true
+}
+
+func isTerminalOpenAIUsagePayload(payload []byte) bool {
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return false
+	}
+
+	finish := strings.TrimSpace(gjson.GetBytes(payload, "choices.0.finish_reason").String())
+	if finish != "" && !strings.EqualFold(finish, "null") {
+		return true
+	}
+
+	choices := gjson.GetBytes(payload, "choices")
+	return choices.Exists() && choices.IsArray() && len(choices.Array()) == 0
 }
 
 func parseClaudeUsage(data []byte) usage.Detail {
@@ -341,6 +358,9 @@ func parseGeminiStreamUsage(line []byte) (usage.Detail, bool) {
 	if !node.Exists() {
 		return usage.Detail{}, false
 	}
+	if !isTerminalGeminiUsagePayload(payload) {
+		return usage.Detail{}, false
+	}
 	return parseGeminiFamilyUsageDetail(node), true
 }
 
@@ -354,6 +374,9 @@ func parseGeminiCLIStreamUsage(line []byte) (usage.Detail, bool) {
 		node = gjson.GetBytes(payload, "usage_metadata")
 	}
 	if !node.Exists() {
+		return usage.Detail{}, false
+	}
+	if !isTerminalGeminiUsagePayload(payload) {
 		return usage.Detail{}, false
 	}
 	return parseGeminiFamilyUsageDetail(node), true
@@ -389,7 +412,35 @@ func parseAntigravityStreamUsage(line []byte) (usage.Detail, bool) {
 	if !node.Exists() {
 		return usage.Detail{}, false
 	}
+	if !isTerminalGeminiUsagePayload(payload) {
+		return usage.Detail{}, false
+	}
 	return parseGeminiFamilyUsageDetail(node), true
+}
+
+func isTerminalGeminiUsagePayload(payload []byte) bool {
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return false
+	}
+
+	finishReason := gjson.GetBytes(payload, "candidates.0.finishReason")
+	if !finishReason.Exists() {
+		finishReason = gjson.GetBytes(payload, "response.candidates.0.finishReason")
+	}
+	if finishReason.Exists() && strings.TrimSpace(finishReason.String()) != "" {
+		return true
+	}
+
+	parts := gjson.GetBytes(payload, "candidates.0.content.parts")
+	if !parts.Exists() {
+		parts = gjson.GetBytes(payload, "response.candidates.0.content.parts")
+	}
+	if parts.Exists() && parts.IsArray() && len(parts.Array()) > 0 {
+		return false
+	}
+
+	// Some upstreams emit a trailing usage-only chunk after a stop chunk.
+	return true
 }
 
 var stopChunkWithoutUsage sync.Map
